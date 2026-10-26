@@ -46,3 +46,25 @@ query ListAlumnos @auth(level: PUBLIC, insecureReason: "Lo necesita el panel de 
 #       matriculas_on_alumno
 #     y se le puede poner un alias:  matriculas: matriculas_on_alumno { ... }
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Resolución L3:
+#  - @auth(level: USER): sin login, el servidor rechaza la query.
+#  - alumno(key: { id_expr: "auth.uid" }): el alumno se busca con el UID del token,
+#    nunca con una variable. Si recibiera $alumnoId, cualquier usuario autenticado
+#    podría pasar el id de otro y leer sus inscripciones → IDOR.
+#  - matriculas: matriculas_on_alumno → alias para que la respuesta tenga la forma
+#    que espera la app ({ alumno { nombre matriculas [...] } }).
+query MisInscripciones @auth(level: USER) {
+  alumno(key: { id_expr: "auth.uid" }) {
+    nombre
+    matriculas: matriculas_on_alumno {
+      fecha
+      curso {
+        id
+        titulo
+        nivel
+        horas
+      }
+    }
+  }
+}
