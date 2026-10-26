@@ -21,7 +21,16 @@ query ListCursos @auth(level: PUBLIC, insecureReason: "El catálogo de cursos es
 # ⚠️ Operación heredada de un desarrollador anterior. Se usa en el panel de admin.
 # TODO L4: auditá esta operación. ¿Quién puede ejecutarla? ¿Qué datos devuelve?
 #          Corregila con el nivel de acceso adecuado.
-query ListAlumnos @auth(level: PUBLIC, insecureReason: "Lo necesita el panel de administración.") {
+#
+# Auditoría L4:
+#  - ¿Quién podía ejecutarla? Cualquiera, sin login (PUBLIC).
+#  - ¿Qué devuelve? id, nombre y email de TODOS los alumnos → datos personales.
+#  - Corrección: NO_ACCESS. Ningún cliente (ni anónimo ni logueado) puede ejecutarla.
+#    USER no alcanza: cualquier alumno logueado vería los emails de los demás.
+#    Un panel de admin no usa el SDK del cliente: usa herramientas con privilegios
+#    (Admin SDK, consola, `dataconnect:execute`), que no pasan por @auth.
+#    Mínimo privilegio: la app no usa esta operación, así que no se expone.
+query ListAlumnos @auth(level: NO_ACCESS) {
   alumnos {
     id
     nombre

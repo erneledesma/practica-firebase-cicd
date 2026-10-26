@@ -39,3 +39,11 @@ mutation Inscribirme($cursoId: UUID!) @auth(level: USER) {
 #   - Borra la inscripción del usuario que llama en ese curso, y solo esa.
 #   - Pista: matricula_delete(key: { ... })
 # ─────────────────────────────────────────────────────────────────────────────
+#
+#  Resolución:
+#   - @auth(level: USER): sin login no se puede borrar nada.
+#   - La clave se arma con alumnoId_expr: "auth.uid": aunque B conozca el cursoId
+#     en el que está A, solo puede borrar la fila (B, curso), nunca la (A, curso).
+mutation DarmeDeBaja($cursoId: UUID!) @auth(level: USER) {
+  matricula_delete(key: { alumnoId_expr: "auth.uid", cursoId: $cursoId })
+}
