@@ -24,6 +24,8 @@ export default function MisInscripciones() {
   async function onBaja(cursoId: string) {
     try {
       await darmeDeBaja(cursoId);
+      // Se quita de la pantalla al instante y después se confirma contra el servidor.
+      setItems((prev) => prev?.filter((i) => i.curso.id !== cursoId) ?? prev);
       cargar();
     } catch (e) {
       setError(mensajeDeError(e));

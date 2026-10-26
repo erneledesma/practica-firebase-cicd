@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { Curso } from "@/lib/cursos";
-import { inscribirme, listarCursos, mensajeDeError } from "@/lib/sqlconnect";
+import { inscribirme, listarCursos, mensajeDeError, misInscripciones } from "@/lib/sqlconnect";
 import { useUsuario } from "@/lib/useUsuario";
 import FiltroCursos from "./FiltroCursos";
 
@@ -14,6 +14,8 @@ export default function CatalogoSql() {
   const [estado, setEstado] = useState<Estado>({ tipo: "cargando" });
   const [aviso, setAviso] = useState<string | null>(null);
   const [enCurso, setEnCurso] = useState<string | null>(null);
+  // Ids de los cursos en los que ya está inscripto el usuario (para marcarlos en el catálogo).
+  const [inscriptos, setInscriptos] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     listarCursos()
@@ -21,11 +23,22 @@ export default function CatalogoSql() {
       .catch((e) => setEstado({ tipo: "error", mensaje: mensajeDeError(e) }));
   }, []);
 
+  useEffect(() => {
+    if (!usuario) {
+      setInscriptos(new Set());
+      return;
+    }
+    misInscripciones()
+      .then((items) => setInscriptos(new Set(items.map((i) => i.curso.id))))
+      .catch(() => setInscriptos(new Set()));
+  }, [usuario]);
+
   async function onInscribirme(curso: Curso) {
     setEnCurso(curso.id);
     setAviso(null);
     try {
       await inscribirme(curso.id);
+      setInscriptos((prev) => new Set(prev).add(curso.id));
       setAviso(`✔ Quedaste inscripto/a en "${curso.titulo}".`);
     } catch (e) {
       setAviso(`✘ No se pudo inscribir: ${mensajeDeError(e)}`);
@@ -54,7 +67,9 @@ export default function CatalogoSql() {
       <FiltroCursos
         cursos={estado.cursos}
         accion={(c) =>
-          usuario ? (
+          usuario && inscriptos.has(c.id) ? (
+            <small className="hint">✔ Ya estás inscripto/a</small>
+          ) : usuario ? (
             <button type="button" className="button button--small" disabled={enCurso === c.id} onClick={() => onInscribirme(c)}>
               {enCurso === c.id ? "Inscribiendo…" : "Inscribirme"}
             </button>
