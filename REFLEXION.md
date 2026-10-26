@@ -139,3 +139,88 @@ Después del rollback en la consola, `live` sirve la versión anterior pero `mai
 
 ### Bonus · promoción sin recompilar
 `npx firebase hosting:clone practica-ci-cd:CANAL practica-ci-cd:live` copia los archivos exactos que se revisaron en el preview al canal `live`. Lo que se aprobó es bit a bit lo que se libera (no hay un segundo build que pueda dar otro resultado). La contra es que el footer va a mostrar la rama del PR y su SHA, no `main`.
+
+---
+
+# Clase 2 · SQL Connect: modelo relacional y autorización
+
+## Entregables
+
+| # | Entregable | Estado |
+|---|---|---|
+| 1 | `dataconnect/` completo (L1–L4 + L5) | Rama `feat/sql-connect` |
+| 2 | Salida de `npm run atacar` antes y después | Abajo |
+| 3 | PR mergeado con el cambio de CSP (L6) | _pendiente_ |
+| 4 | Producción con inscripción (L7) | _pendiente_ |
+| 5 | Reflexión | Abajo |
+
+## Auditoría · `npm run atacar`
+
+Se omiten las líneas de log `@firebase/data-connect: ... Error while performing request` que imprime el SDK cada vez que el servidor rechaza una llamada (son los ataques bloqueados, no errores del script).
+
+### Antes de corregir (L1–L3 hechas, `ListAlumnos` todavía `PUBLIC`)
+
+```
+Auditoría de SQL Connect · proyecto practica-ci-cd · emuladores locales
+
+✔ ListCursos responde sin login (7 cursos) — público por diseño
+✘ ListAlumnos devuelve datos personales SIN login
+    Ejemplo filtrado: {"email":"melina@test.com","id":"S0uFhQP6a2fEVRvJOplZmRG8ZJCc","nombre":"Melina"}
+✔ Inscribirme rechazada sin login
+    unauthenticated: this operation requires a signed-in user
+✔ Inscribirme es idempotente (repetir no falla)
+✔ MisInscripciones solo devuelve lo del usuario que llama
+… DarmeDeBaja todavía no existe (TODO L5, opcional)
+
+❌ 1 vulnerabilidad(es) · 1 pendiente(s)
+```
+
+### Después (L4 `NO_ACCESS` + L5)
+
+```
+Auditoría de SQL Connect · proyecto practica-ci-cd · emuladores locales
+
+✔ ListCursos responde sin login (7 cursos) — público por diseño
+✔ ListAlumnos rechazada para un cliente
+    unauthorized: you are not authorized to perform this operation
+✔ Inscribirme rechazada sin login
+    unauthenticated: this operation requires a signed-in user
+✔ Inscribirme es idempotente (repetir no falla)
+✔ MisInscripciones solo devuelve lo del usuario que llama
+✔ B no puede dar de baja a A
+
+✅ Todos los controles pasaron
+```
+
+Los dos rechazos son distintos: `Inscribirme` sin token da `UNAUTHENTICATED` (falta identidad: con login funcionaría), mientras que `ListAlumnos` da `PERMISSION_DENIED` (`@auth(level: NO_ACCESS) always reject non-admin requests`): aunque el usuario esté logueado, ningún cliente puede ejecutarla.
+
+## Decisiones
+
+- **L1 · Clave compuesta `(alumno, curso)`** en lugar de un UUID propio: la unicidad de la inscripción la garantiza PostgreSQL (`PRIMARY KEY (alumno_id, curso_id)`), no la app. Las claves foráneas tienen `ON DELETE CASCADE`: si se borra un alumno o un curso, se borran sus matrículas. `fecha` usa `@default(expr: "request.time")`, así que el cliente no puede inventarla.
+- **L2 · `upsert` y no `insert`**: con `matricula_insert`, inscribirse dos veces falla por clave duplicada (la base no duplica, pero la operación da error). `matricula_upsert` actualiza la fila existente, así que repetir la llamada deja el mismo estado y no falla: es idempotente. Sirve para reintentos de red o doble clic.
+- **L5 · `matricula_delete(key: { alumnoId_expr: "auth.uid", cursoId })`**: la clave a borrar incluye el UID del token, así que un usuario solo puede borrar su propia fila aunque conozca el `cursoId` de otro.
+- **Mejora posible · cupo**: hoy nada impide inscribir más alumnos que `Curso.cupo`. No se puede expresar con una restricción simple de la tabla (depende de contar filas de otra), así que habría que validarlo en la mutation (por ejemplo, con `@check` sobre una query previa dentro de una `@transaction`) o con un trigger en PostgreSQL. Además convendría `CHECK (cupo > 0)` y `CHECK (horas > 0)` en `Curso`.
+- **Frontend · caché del SDK**: `executeQuery` usa `PREFER_CACHE` por defecto, y después de inscribirse o darse de baja la lista quedaba vieja hasta refrescar. `misInscripciones()` ahora usa `fetchPolicy: SERVER_ONLY`, y el catálogo marca los cursos en los que el usuario ya está inscripto.
+
+## Preguntas
+
+### 1. ¿Por qué ninguna operación recibe el id del alumno? IDOR y `auth.uid`
+Porque el cliente no es de confianza: cualquiera puede leer la config pública y llamar a la API con las variables que quiera. Si `MisInscripciones` recibiera `$alumnoId`, un usuario logueado podría pasar el id de otro y leer sus inscripciones; `@auth(level: USER)` no lo frena, porque solo verifica que haya *alguien* logueado, no que sea el dueño. Eso es **IDOR** (*Insecure Direct Object Reference*, API1 del OWASP API Top 10): el servidor confía en una referencia a un objeto que manda el cliente sin verificar que le pertenezca. Con `auth.uid` el id sale del token que firma Firebase Auth y verifica el servidor; el cliente no puede cambiarlo.
+
+### 2. `ListCursos` PUBLIC y `ListAlumnos` NO_ACCESS: criterio y panel de admin
+El criterio es qué dato expone y quién lo necesita (mínimo privilegio). El catálogo es información pública que la app muestra sin login. `ListAlumnos` devuelve nombre y email de todos los alumnos: son datos personales y la app no la usa. `USER` no alcanzaba, porque cualquier alumno logueado podría listar los emails de los demás.
+El panel de admin no debería usar el SDK del cliente. Opciones: usar herramientas con privilegios de administrador, que no pasan por `@auth` (Admin SDK desde un backend o Cloud Function, `firebase dataconnect:execute`, la consola); o, si el panel es parte de la app, darle a los administradores un *custom claim* (`admin: true`, asignado con el Admin SDK) y proteger la operación con `@auth(expr: "auth.token.admin == true")`, así solo esos tokens pueden ejecutarla.
+
+### 3. Clave compuesta vs validar duplicados en el cliente
+La validación en el cliente se saltea llamando a la API directamente (justo lo que hace `atacar`) y además tiene condiciones de carrera: dos pedidos simultáneos pueden pasar el "¿ya está inscripto?" antes de que alguno inserte. La clave primaria compuesta la aplica PostgreSQL de forma atómica en cada escritura, venga de donde venga. La regla vive en un solo lugar, el más cercano a los datos.
+
+### 4. La config de Firebase es pública: ¿por qué no compromete la base? ¿Qué faltaría?
+La `apiKey` identifica el proyecto, no autoriza nada. Lo que protege los datos es que el cliente solo puede ejecutar las operaciones con nombre definidas en el conector, cada una con su `@auth`, y que la identidad sale del token de Firebase Auth. Lo que no frena es a alguien que use esa config desde un script propio para llamar a las operaciones permitidas (crear cuentas en masa, inscribirse en todo, abusar de `ListCursos`). Para eso está **App Check**: el servidor exige además un token que certifica que la llamada viene de la app real (en web, con reCAPTCHA Enterprise), y rechaza scripts y clientes no registrados.
+
+### 5. SQL Connect vs una API REST propia (Express + pg)
+**SQL Connect:** no tengo que escribir ni mantener un servidor: declaro las operaciones en los `.gql` y Firebase las ejecuta. El cliente solo manda el nombre de la operación y sus variables, así que la inyección SQL queda cerrada por diseño. La autorización (`@auth`) y la identidad (`auth.uid`) se declaran al lado de cada operación, y se audita toda la API leyendo dos archivos. El esquema genera las tablas y migraciones solo. A cambio, la lógica de negocio queda limitada, dependo de Google Cloud y, al terminar la prueba de 90 días, se paga.
+
+**Express + pg:** escribo yo el servidor, cada endpoint y cada consulta SQL. Tengo control total: puedo agregar cualquier regla de negocio (cupo, mails, pagos), elegir y optimizar cada consulta, y llevarlo a cualquier hosting sin depender de un proveedor. Pero toda la seguridad depende de mí: verificar el token en cada ruta, validar las entradas y parametrizar el SQL para evitar inyección. Un olvido en una sola ruta la deja expuesta. Además tengo que desplegar, actualizar y escalar el servidor, y manejar las migraciones.
+
+### 6. ¿Por qué no alcanzó la CSP de la clase 1 y por qué dominios exactos en `connect-src`?
+_Pendiente: se completa después de la L6._
