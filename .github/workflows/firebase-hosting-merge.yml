@@ -1,27 +1,32 @@
 # ─────────────────────────────────────────────────────────────────────────────
 #  Pipeline de PRODUCCIÓN: lo que se mergea a `main` se publica en el canal
 #  `live` de Firebase Hosting.
-#
-#  Buscá los comentarios "TODO A?" y completalos según el enunciado.
 # ─────────────────────────────────────────────────────────────────────────────
 name: Deploy a producción
 
-# TODO A1: Cambiá el trigger para que corra en cada push a la rama `main`.
+# A1: corre en cada push a main (incluye el merge de un PR).
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
 
-# TODO A4 (opcional): en producción NO queremos cancelar un deploy a mitad de
-#                     camino, pero sí evitar dos deploys en paralelo.
-#                     ¿Cómo configurás `concurrency` para eso?
+# A4: los deploys a producción hacen fila y NUNCA se cancelan a mitad de camino.
+concurrency:
+  group: production
+  cancel-in-progress: false
 
 jobs:
   build_and_deploy:
     runs-on: ubuntu-latest
-    # TODO A5 (opcional): asociá este job a un GitHub Environment llamado
-    #                     `production` (permite exigir aprobación manual).
+    timeout-minutes: 15
+    # A5: environment `production` (en Settings → Environments se puede exigir
+    #     aprobación manual de un revisor antes de que este job arranque).
+    environment:
+      name: production
+      url: https://practica-ci-cd.web.app
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -38,21 +43,33 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      # TODO A2: igual que en el workflow de PR, pero con los datos del push a main.
-      #          Pistas: github.sha, github.ref_name
+      # A2: en un push, github.sha es el commit de main y ref_name es "main".
       - name: Build (export estático)
         run: npm run build
         env:
           NEXT_TELEMETRY_DISABLED: 1
-          NEXT_PUBLIC_BUILD_SHA: "TODO"
-          NEXT_PUBLIC_BUILD_REF: "TODO"
+          NEXT_PUBLIC_BUILD_SHA: ${{ github.sha }}
+          NEXT_PUBLIC_BUILD_REF: ${{ github.ref_name }}
           NEXT_PUBLIC_BUILD_TIME: ${{ github.event.head_commit.timestamp }}
+
+      - name: CSP con hashes de scripts inline
+        run: node scripts/csp-hashes.mjs
 
       - name: Deploy al canal live
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
-          # TODO A3: mismo secreto que en el workflow de PR.
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_REEMPLAZAR }}
-          projectId: REEMPLAZAR-POR-TU-PROJECT-ID
-          # TODO A3: ¿qué valor de channelId publica en producción?
-          # channelId: ???
+          # A3: mismo secreto que en el workflow de PR.
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_PRACTICA_CI_CD }}
+          projectId: practica-ci-cd
+          # A3: "live" publica en producción (<project>.web.app).
+          channelId: live
+
+      - name: Verificar headers en producción
+        timeout-minutes: 5
+        run: |
+          for i in $(seq 1 24); do
+            code=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" "https://practica-ci-cd.web.app/")
+            [ "$code" = "200" ] && break
+            sleep 5
+          done
+          node scripts/check-headers.mjs "https://practica-ci-cd.web.app"
