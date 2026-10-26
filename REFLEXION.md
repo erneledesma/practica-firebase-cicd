@@ -223,4 +223,10 @@ La `apiKey` identifica el proyecto, no autoriza nada. Lo que protege los datos e
 **Express + pg:** escribo yo el servidor, cada endpoint y cada consulta SQL. Tengo control total: puedo agregar cualquier regla de negocio (cupo, mails, pagos), elegir y optimizar cada consulta, y llevarlo a cualquier hosting sin depender de un proveedor. Pero toda la seguridad depende de mí: verificar el token en cada ruta, validar las entradas y parametrizar el SQL para evitar inyección. Un olvido en una sola ruta la deja expuesta. Además tengo que desplegar, actualizar y escalar el servidor, y manejar las migraciones.
 
 ### 6. ¿Por qué no alcanzó la CSP de la clase 1 y por qué dominios exactos en `connect-src`?
-_Pendiente: se completa después de la L6._
+La CSP de la clase 1 tenía `connect-src 'self'`: el navegador solo permitía `fetch`/XHR al mismo origen (`practica-ci-cd.web.app`). En la clase 1 alcanzaba porque los cursos estaban en el código, pero ahora la app le habla directamente desde el navegador a Firebase Auth y a SQL Connect, que están en otros dominios, y el navegador bloqueaba esas llamadas (`Refused to connect`). Agregué solo los tres orígenes que usa la app:
+
+- `https://identitytoolkit.googleapis.com`: Firebase Auth (registrarse e iniciar sesión).
+- `https://securetoken.googleapis.com`: Firebase Auth (renovar el token cuando vence).
+- `https://firebasedataconnect.googleapis.com`: SQL Connect (ejecutar las queries y mutations).
+
+No usé `https://*.googleapis.com` porque ese comodín abre cientos de APIs de Google (Drive, Storage, Gmail...). Si un atacante lograra inyectar un script en la página, podría mandar los datos robados a un recurso suyo en alguna de esas APIs y la CSP no lo frenaría. `connect-src` es la última barrera contra la exfiltración de datos: cuanto más exacta la lista, menos salidas tiene un script malicioso. Además, una lista exacta documenta con qué servicios habla la app.
