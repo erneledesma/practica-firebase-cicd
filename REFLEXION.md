@@ -202,6 +202,35 @@ Los dos rechazos son distintos: `Inscribirme` sin token da `UNAUTHENTICATED` (fa
 - **Mejora posible · cupo**: hoy nada impide inscribir más alumnos que `Curso.cupo`. No se puede expresar con una restricción simple de la tabla (depende de contar filas de otra), así que habría que validarlo en la mutation (por ejemplo, con `@check` sobre una query previa dentro de una `@transaction`) o con un trigger en PostgreSQL. Además convendría `CHECK (cupo > 0)` y `CHECK (horas > 0)` en `Curso`.
 - **Frontend · caché del SDK**: `executeQuery` usa `PREFER_CACHE` por defecto, y después de inscribirse o darse de baja la lista quedaba vieja hasta refrescar. `misInscripciones()` ahora usa `fetchPolicy: SERVER_ONLY`, y el catálogo marca los cursos en los que el usuario ya está inscripto.
 
+## Producción (L7) · deploy y migración
+
+`npx firebase deploy --only dataconnect` activó las APIs `firebasedataconnect` y `sqladmin`, creó el servicio `catalogo` (us-east4), publicó el conector `cursos` y empezó a crear la instancia Cloud SQL `catalogo-fdc` bajo la prueba sin costo. Como la instancia todavía se estaba creando, el CLI salteó la migración del SQL (`Skip SQL schema migration because Cloud SQL is still being created`): mientras tanto SQL Connect guarda los datos en una base temporal y los migra al terminar.
+
+Con la instancia lista, `npx firebase dataconnect:sql:diff` compara el esquema de los `.gql` con la base real:
+
+```
++  dataconnect: Database schema of catalogo-fdc:fdcdb matches SQL Connect Schema exactly.
+```
+
+**Análisis:** no queda ninguna migración pendiente: las tablas de PostgreSQL coinciden exactamente con `schema.gql`. La migración que se aplicó es la misma que mostró el emulador al agregar `Matricula` en la L1:
+
+```sql
+CREATE TABLE "public"."matricula" (
+  "alumno_id" text NOT NULL, "curso_id" uuid NOT NULL, "fecha" timestamptz NOT NULL,
+  PRIMARY KEY ("alumno_id", "curso_id"),
+  CONSTRAINT "matricula_alumno_id_fkey" FOREIGN KEY ("alumno_id") REFERENCES "public"."alumno" ("id") ON DELETE CASCADE,
+  CONSTRAINT "matricula_curso_id_fkey" FOREIGN KEY ("curso_id") REFERENCES "public"."curso" ("id") ON DELETE CASCADE
+);
+CREATE INDEX "matricula_alumnoId_idx" ON "public"."matricula" ("alumno_id");
+CREATE INDEX "matricula_cursoId_idx" ON "public"."matricula" ("curso_id");
+```
+
+- La clave compuesta de la L1 se traduce en un `PRIMARY KEY` de dos columnas: la unicidad la aplica PostgreSQL.
+- `alumno: Alumno!` y `curso: Curso!` generan las claves foráneas, con `ON DELETE CASCADE`.
+- SQL Connect crea además un índice por cada clave foránea. El de `alumno_id` es el que usa `MisInscripciones` (buscar las matrículas de un alumno), y el de `curso_id` serviría para contar inscriptos por curso (por ejemplo, para validar el cupo).
+- `fecha` es `NOT NULL` sin `DEFAULT` en SQL: el `request.time` lo completa SQL Connect al ejecutar la mutation, no PostgreSQL.
+- Antes de cambiar el esquema en producción, `sql:diff` permite ver qué SQL se va a ejecutar. Un cambio que borre o modifique columnas podría perder datos, así que conviene revisarlo antes del deploy.
+
 ## Preguntas
 
 ### 1. ¿Por qué ninguna operación recibe el id del alumno? IDOR y `auth.uid`
