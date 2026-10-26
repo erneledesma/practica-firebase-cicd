@@ -40,3 +40,14 @@ type Alumno @table {
 #  ¿Por qué `Matricula` y no `Inscripcion`? SQL Connect arma el plural agregando
 #  una "s" (curso → cursos). "inscripcions" quedaría mal; "matriculas" no.
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Matricula: tabla intermedia Alumno <-> Curso (muchos-a-muchos).
+# - `alumno` y `curso` generan las claves foráneas alumnoId y cursoId.
+# - La clave primaria compuesta (alumno, curso) impide inscribirse dos veces al mismo curso:
+#   la regla la garantiza la base de datos, no el código de la app.
+# - `fecha` la completa el servidor con la hora del request; el cliente no puede elegirla.
+type Matricula @table(key: ["alumno", "curso"]) {
+  alumno: Alumno!
+  curso: Curso!
+  fecha: Timestamp! @default(expr: "request.time")
+}
